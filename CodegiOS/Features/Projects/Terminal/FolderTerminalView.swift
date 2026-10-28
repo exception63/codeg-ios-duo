@@ -140,29 +140,56 @@ struct FolderTerminalView: View {
 /// returns a plain container and `updateUIView` re-parents the *same* retained
 /// terminal view into it — preserving scrollback and the running PTY. The
 /// emulator's own `layoutSubviews` recomputes cols/rows (no fit addon needed).
+///
+/// Two containers can briefly coexist when the whole screen is rebuilt (an
+/// iPhone Duo fold/unfold swaps the app shell around a cached session): the
+/// outgoing one may update after the incoming one and pull the terminal back
+/// with it. So the newest container owns the terminal and claims it once it is
+/// in a window; an older one only takes it back if the owner is gone.
 struct TerminalSurface: UIViewRepresentable {
     let session: TerminalSession
     let dark: Bool
 
-    func makeUIView(context: Context) -> UIView {
-        let container = UIView()
+    func makeUIView(context: Context) -> TerminalContainer {
+        let container = TerminalContainer()
         container.backgroundColor = .clear
+        container.term = session.view
+        TerminalContainer.owners.setObject(container, forKey: session.view)
         return container
     }
 
-    func updateUIView(_ container: UIView, context: Context) {
-        let term = session.view
-        if term.superview !== container {
-            term.removeFromSuperview()
-            term.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(term)
-            NSLayoutConstraint.activate([
-                term.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                term.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-                term.topAnchor.constraint(equalTo: container.topAnchor),
-                term.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            ])
-        }
+    func updateUIView(_ container: TerminalContainer, context: Context) {
+        container.term = session.view
+        container.claim()
         session.applyTheme(dark: dark)
+    }
+}
+
+/// See ``TerminalSurface``: adopts the shared terminal view once on screen.
+final class TerminalContainer: UIView {
+    weak var term: UIView?
+
+    /// Terminal view → the container that should host it (the newest one).
+    static let owners = NSMapTable<UIView, TerminalContainer>.weakToWeakObjects()
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        claim()
+    }
+
+    func claim() {
+        guard let term, term.superview !== self, window != nil else { return }
+        let owner = Self.owners.object(forKey: term)
+        guard owner === self || owner?.window == nil else { return }
+        Self.owners.setObject(self, forKey: term)
+        term.removeFromSuperview()
+        term.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(term)
+        NSLayoutConstraint.activate([
+            term.leadingAnchor.constraint(equalTo: leadingAnchor),
+            term.trailingAnchor.constraint(equalTo: trailingAnchor),
+            term.topAnchor.constraint(equalTo: topAnchor),
+            term.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
     }
 }

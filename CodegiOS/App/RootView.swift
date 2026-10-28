@@ -6,9 +6,15 @@ import SwiftUI
 ///   tab, not a detached search pill). Running tasks surface as a badge on the
 ///   Activity tab. The current server is switched from the Chats title menu;
 ///   opening a session pushes the detail (hiding the tab bar).
-/// - **Regular** (iPad, landscape): a three-column `NavigationSplitView` whose
-///   sidebar is the source list (Chats / Folders / Activity), with the same
-///   server title menu and a gear that presents Settings as a sheet.
+/// - **Regular** (iPad, an unfolded iPhone Duo): a three-column
+///   `NavigationSplitView` whose sidebar is the source list (Chats / Folders /
+///   Activity / Search), with the same server title menu and a gear that
+///   presents Settings as a sheet. The content column lists the selected tab;
+///   the detail column shows that tab's route stack.
+///
+/// Both shells read one navigation state (`AppModel.selectedTab` + `paths`), so
+/// switching between them — folding or unfolding an iPhone Duo — keeps the
+/// user on the same session / folder / terminal.
 ///
 /// First launch with no saved servers shows the onboarding screen instead.
 struct RootView: View {
@@ -48,7 +54,7 @@ struct RootView: View {
         .preferredColorScheme(appearance.mode.colorScheme)
         .onOpenURL { model.handle(url: $0) }
         .onChange(of: horizontalSizeClass, initial: true) { _, size in
-            model.isCompact = size == .compact
+            model.adapt(toCompact: size == .compact)
         }
         // If the selected server is edited in place (same UUID, new endpoint),
         // its conversation/folder IDs may no longer be valid — drop them.
@@ -267,6 +273,20 @@ struct RootView: View {
             detailColumn
         }
         .navigationSplitViewStyle(.balanced)
+        // Columns by available width, re-applied only when the bucket flips (so a
+        // manual toggle sticks): all three when they fit; list + detail on an
+        // unfolded iPhone Duo in landscape (~880pt — `.all` would float the
+        // sidebar over the list); detail alone in its portrait (669pt), unless
+        // there is nothing to show yet.
+        .onGeometryChange(for: Int.self) { geo in
+            geo.size.width >= 1000 ? 2 : geo.size.width >= 800 ? 1 : 0
+        } action: { bucket in
+            columnVisibility = switch bucket {
+            case 2: .all
+            case 1: .doubleColumn
+            default: model.paths[model.selectedTab, default: []].isEmpty ? .doubleColumn : .detailOnly
+            }
+        }
         .sheet(isPresented: $model.settingsSheetPresented) {
             SettingsSheet(
                 store: model.serverStore,
@@ -278,8 +298,8 @@ struct RootView: View {
 
     @ViewBuilder
     private var contentRoot: some View {
-        switch model.sidebarSection {
-        case .chats:
+        switch model.selectedTab {
+        case .chats, .settings:
             if let server = model.selectedServer, let client = model.serverStore.client(for: server) {
                 SessionListView(
                     server: server,
@@ -308,39 +328,49 @@ struct RootView: View {
                 client: model.selectedClient(),
                 onOpen: { model.open(.conversation($0)) }
             )
-        case nil:
-            ColumnPlaceholder(
-                icon: "sidebar.left",
-                title: "Nothing Selected",
-                message: "Choose a section in the sidebar."
+        case .search:
+            SearchView(
+                client: model.selectedClient(),
+                onOpen: { model.open(.conversation($0)) }
             )
+            .id(model.selectedServerID)
         }
     }
 
-    @ViewBuilder
+    /// The selected tab's route stack: its first route is the column's root, the
+    /// rest are pushed on top (e.g. a new task opened from a folder).
     private var detailColumn: some View {
-        if let server = model.selectedServer,
-           let client = model.serverStore.client(for: server),
-           let pending = model.pendingNewSession {
-            SessionDetailView(server: server, client: client, newSession: pending,
-                              onOpenSession: { model.open(.newSession($0)) })
-                .id(pending.id)
-        } else if let server = model.selectedServer,
-                  let client = model.serverStore.client(for: server),
-                  let conversationID = model.selectedConversationID {
-            SessionDetailView(server: server, client: client, conversationID: conversationID,
-                              onOpenSession: { model.open(.newSession($0)) })
-                // Recreate the stateful detail model when the conversation, the
-                // server, or its token changes — so it never streams against a
-                // stale CodegClient after an in-place server edit / token rotation.
-                .id("\(server.id)|\(conversationID)|\(client.token.hashValue)")
-        } else {
-            ColumnPlaceholder(
-                icon: "sparkles",
-                title: "Select a Session",
-                message: "Pick a session to view its messages and reply to the agent."
-            )
+        let tab = model.selectedTab
+        return NavigationStack(path: detailPath(tab)) {
+            Group {
+                if let root = model.paths[tab]?.first {
+                    routeDestination(root)
+                } else {
+                    ColumnPlaceholder(
+                        icon: "sparkles",
+                        title: tab == .projects ? "Select a Folder" : "Select a Session",
+                        message: tab == .projects
+                            ? "Pick a folder to browse its files, changes, commits and terminal."
+                            : "Pick a session to view its messages and reply to the agent."
+                    )
+                }
+            }
+            .navigationDestination(for: Route.self) { route in
+                routeDestination(route)
+            }
         }
+        .id(tab)
+    }
+
+    private func detailPath(_ tab: AppTab) -> Binding<[Route]> {
+        Binding(
+            get: { Array(model.paths[tab, default: []].dropFirst()) },
+            set: { rest in
+                if let root = model.paths[tab]?.first {
+                    model.paths[tab] = [root] + rest
+                }
+            }
+        )
     }
 
     // MARK: - Shared destinations
@@ -352,14 +382,18 @@ struct RootView: View {
     @ViewBuilder
     private func routeDestination(_ route: Route) -> some View {
         if let server = model.selectedServer, let client = model.serverStore.client(for: server) {
+            // Session and folder screens come from AppModel's cache, so a shell
+            // swap (iPhone Duo fold/unfold) re-hosts the live screen.
             switch route {
             case .conversation(let id):
-                SessionDetailView(server: server, client: client, conversationID: id,
+                SessionDetailView(server: server, client: client,
+                                  model: model.sessionModel(for: route, client: client),
                                   onOpenSession: { model.open(.newSession($0)) })
                     .id("\(server.id)|\(id)|\(client.token.hashValue)")
                     .toolbar(.hidden, for: .tabBar)
             case .newSession(let request):
-                SessionDetailView(server: server, client: client, newSession: request,
+                SessionDetailView(server: server, client: client,
+                                  model: model.sessionModel(for: route, client: client),
                                   onOpenSession: { model.open(.newSession($0)) })
                     .id(request.id)
                     .toolbar(.hidden, for: .tabBar)
@@ -368,7 +402,8 @@ struct RootView: View {
                     client: client,
                     folderID: id,
                     activity: model.activity,
-                    onNewSession: { model.open(.newSession(NewSessionRequest(preselectedFolderID: $0.id))) }
+                    onNewSession: { model.open(.newSession(NewSessionRequest(preselectedFolderID: $0.id))) },
+                    screenState: { model.folderState(for: $0, client: client) }
                 )
                 .id("\(server.id)|folder-\(id)")
             }
@@ -403,21 +438,30 @@ struct RootView: View {
 
 // MARK: - iPad sidebar
 
-/// The split view's source list: Chats / Projects / Activity, the server title
-/// menu, and a gear presenting Settings as a sheet. (Settings was previously
-/// unreachable on iPad.)
+/// The split view's source list: the compact shell's tabs (Settings aside), the
+/// server title menu, and a gear presenting Settings as a sheet. Selecting a
+/// row selects the same `AppModel.selectedTab` the compact tab bar uses.
 private struct SplitSidebar: View {
     @Bindable var model: AppModel
 
+    private var selection: Binding<AppTab?> {
+        Binding(
+            get: { model.selectedTab == .settings ? nil : model.selectedTab },
+            set: { if let tab = $0 { model.selectedTab = tab } }
+        )
+    }
+
     var body: some View {
-        List(selection: $model.sidebarSection) {
+        List(selection: selection) {
             Label("Chats", systemImage: "message")
-                .tag(SidebarSection.chats)
+                .tag(AppTab.chats)
             Label("Folders", systemImage: "folder")
-                .tag(SidebarSection.projects)
+                .tag(AppTab.projects)
             Label("Activity", systemImage: "waveform")
-                .tag(SidebarSection.activity)
+                .tag(AppTab.activity)
                 .badge(model.activity.running.count)
+            Label("Search", systemImage: "magnifyingglass")
+                .tag(AppTab.search)
         }
         .navigationTitle(model.selectedServer?.name ?? "Codeg")
         .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)

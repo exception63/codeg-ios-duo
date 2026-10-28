@@ -12,6 +12,10 @@ struct ProjectDetailView: View {
     let activity: ActivityModel
     /// Start a new task in this folder (the only session affordance left here).
     let onNewSession: (FolderDetail) -> Void
+    /// Supplies a cached per-folder state (selected tab, git model, terminal) so
+    /// the screen survives its host being rebuilt (iPhone Duo fold/unfold). `nil`
+    /// gives the screen its own state for its lifetime.
+    var screenState: ((FolderDetail) -> FolderScreenState)? = nil
 
     var body: some View {
         ZStack {
@@ -54,7 +58,8 @@ struct ProjectDetailView: View {
             FolderDetailContent(
                 client: client,
                 folder: folder,
-                activity: activity
+                activity: activity,
+                state: screenState?(folder)
             )
             .id(folder.id)
         } else if !activity.hasLoaded {
@@ -80,17 +85,17 @@ private struct FolderDetailContent: View {
     let folder: FolderDetail
     let activity: ActivityModel
 
-    @State private var tab: FolderTab = .files
-    @State private var git: FolderGitModel
-    @State private var terminal: TerminalSession
+    @State private var state: FolderScreenState
     @State private var showCommit = false
 
-    init(client: CodegClient, folder: FolderDetail, activity: ActivityModel) {
+    private var git: FolderGitModel { state.git }
+    private var terminal: TerminalSession { state.terminal }
+
+    init(client: CodegClient, folder: FolderDetail, activity: ActivityModel, state: FolderScreenState? = nil) {
         self.client = client
         self.folder = folder
         self.activity = activity
-        _git = State(initialValue: FolderGitModel(client: client, rootPath: folder.path, folderId: folder.id))
-        _terminal = State(initialValue: TerminalSession(client: client, folder: folder))
+        _state = State(initialValue: state ?? FolderScreenState(client: client, folder: folder))
     }
 
     var body: some View {
@@ -134,7 +139,8 @@ private struct FolderDetailContent: View {
     }
 
     private var tabPicker: some View {
-        Picker("View", selection: $tab) {
+        @Bindable var state = state
+        return Picker("View", selection: $state.tab) {
             ForEach(FolderTab.allCases) { tab in
                 Text(tab.label).tag(tab)
             }
@@ -144,7 +150,7 @@ private struct FolderDetailContent: View {
 
     @ViewBuilder
     private var tabContent: some View {
-        switch tab {
+        switch state.tab {
         case .files:
             FolderFilesView(client: client, rootPath: folder.path, dirPath: folder.path, embedded: true)
                 .padding(.horizontal, Theme.Layout.screenHMargin)
@@ -158,6 +164,22 @@ private struct FolderDetailContent: View {
             // Edge-to-edge: the terminal manages its own internal inset.
             FolderTerminalView(session: terminal)
         }
+    }
+}
+
+/// What a folder screen keeps across rebuilds of its view: the selected tab,
+/// the git model, and the terminal (whose PTY dies with it). Owned by the view
+/// by default, or by `AppModel`'s screen cache so it outlives a shell swap.
+@MainActor
+@Observable
+final class FolderScreenState {
+    var tab: FolderTab = .files
+    let git: FolderGitModel
+    let terminal: TerminalSession
+
+    init(client: CodegClient, folder: FolderDetail) {
+        git = FolderGitModel(client: client, rootPath: folder.path, folderId: folder.id)
+        terminal = TerminalSession(client: client, folder: folder)
     }
 }
 

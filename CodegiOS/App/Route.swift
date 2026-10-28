@@ -2,23 +2,14 @@ import Foundation
 
 /// The five top-level tabs of the compact (iPhone) shell: four content tabs
 /// plus the system search tab (rendered by iOS 26 as the separated glass
-/// magnifier next to the tab bar). Regular width (iPad) maps the same
-/// destinations onto the split view's sidebar instead.
+/// magnifier next to the tab bar). Regular width (iPad, an unfolded iPhone Duo)
+/// lists the same tabs in the split view's sidebar, Settings aside (a sheet).
 enum AppTab: String, Hashable, CaseIterable {
     case chats
     case projects
     case activity
     case settings
     case search
-}
-
-/// iPad sidebar selection — the split view's "source list". Settings is
-/// presented as a sheet on iPad (gear in the sidebar toolbar), and search rides
-/// the content column, so neither needs a sidebar row.
-enum SidebarSection: String, Hashable {
-    case chats
-    case projects
-    case activity
 }
 
 /// A pushable destination. Every entry point (list rows, search results,

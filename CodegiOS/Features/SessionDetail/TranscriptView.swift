@@ -21,6 +21,21 @@ extension EnvironmentValues {
     }
 }
 
+// MARK: - Scroll memory
+
+/// Where a transcript was left: pinned to the bottom, or which node was at the
+/// top of the viewport (plus how far the window had paged back). Owned by the
+/// session's view model so a rebuilt `TranscriptView` — an iPhone Duo fold or
+/// unfold swaps the whole shell — reopens at the same spot instead of the bottom.
+@MainActor
+final class TranscriptScrollMemory {
+    var pinnedToBottom = true
+    var topNodeID: String?
+    var windowStartTurn: Int?
+    /// Nodes currently realized by the `List`, in no particular order.
+    fileprivate var visibleNodeIDs: Set<String> = []
+}
+
 // MARK: - Transcript
 
 /// The scrollable transcript, rendered as a **vertical timeline**: a continuous
@@ -62,6 +77,8 @@ struct TranscriptView<Header: View>: View {
     /// Bumped on the user's own send / initial load; forces a re-pin regardless
     /// of the current scroll position.
     let stickTick: Int
+    /// Remembers the scroll position across rebuilds of this view (optional).
+    var scrollMemory: TranscriptScrollMemory? = nil
     /// Reports whether the viewport is parked at the bottom. The owning view uses
     /// it to show/hide the floating "jump to latest" button (which lives above the
     /// compose bar, not here, so it is reliably tappable).
@@ -76,6 +93,9 @@ struct TranscriptView<Header: View>: View {
     /// auto-follow (only follow streamed tokens when true). Starts true so a fresh
     /// open follows.
     @State private var stuckToBottom = true
+    /// False until `restore` has placed the viewport: a fresh `List` first lays
+    /// out at the bottom, and recording that would overwrite `scrollMemory`.
+    @State private var restored = false
 
     // MARK: Windowing
     //
@@ -211,6 +231,7 @@ struct TranscriptView<Header: View>: View {
         guard cur > 0, !isLoadingEarlier else { return }
         isLoadingEarlier = true
         windowStartTurn = snappedStart(cur - pageTurns)
+        scrollMemory?.windowStartTurn = windowStartTurn
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(300))
             isLoadingEarlier = false
@@ -252,6 +273,8 @@ struct TranscriptView<Header: View>: View {
                     // on the transcript in `SessionDetailView`.
                     .transition(.opacity)
                     .id(node.id)
+                    .onAppear { scrollMemory?.visibleNodeIDs.insert(node.id) }
+                    .onDisappear { scrollMemory?.visibleNodeIDs.remove(node.id) }
                 }
 
                 // Zero-height anchor we scroll to (a little top inset keeps the
@@ -288,6 +311,14 @@ struct TranscriptView<Header: View>: View {
             } action: { _, atBottom in
                 stuckToBottom = atBottom
                 onPinnedChange(atBottom)
+                if restored { scrollMemory?.pinnedToBottom = atBottom }
+            }
+            // Remember the top-most realized node whenever scrolling settles, so a
+            // rebuilt view can restore the position (see `restore`).
+            .onScrollPhaseChange { _, phase in
+                guard phase == .idle, restored, let memory = scrollMemory else { return }
+                let ids = nodes.map(\.id)
+                memory.topNodeID = ids.first { memory.visibleNodeIDs.contains($0) }
             }
             // Reveal older turns as the user scrolls toward the top. Mapped to a
             // Bool so `action` fires only when crossing into the near-top zone (not
@@ -318,7 +349,28 @@ struct TranscriptView<Header: View>: View {
                 onPinnedChange(true)
                 scrollToBottom(proxy)
             }
-            .onAppear { scrollToBottom(proxy) }
+            .onAppear { restore(proxy) }
+        }
+    }
+
+    /// First appearance: reopen where the transcript was left (a rebuilt view
+    /// over a cached model), else at the latest message.
+    private func restore(_ proxy: ScrollViewProxy) {
+        guard let memory = scrollMemory, !memory.pinnedToBottom, let id = memory.topNodeID else {
+            scrollToBottom(proxy)
+            restored = true
+            return
+        }
+        stuckToBottom = false
+        onPinnedChange(false)
+        // Re-page the history the remembered node may live in before scrolling.
+        if let start = memory.windowStartTurn { windowStartTurn = start }
+        proxy.scrollTo(id, anchor: .top)
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(80))
+            proxy.scrollTo(id, anchor: .top)
+            try? await Task.sleep(for: .milliseconds(300))
+            restored = true
         }
     }
 

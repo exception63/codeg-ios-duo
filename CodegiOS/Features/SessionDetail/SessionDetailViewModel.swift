@@ -291,6 +291,10 @@ final class SessionDetailViewModel {
     func load() async {
         switch mode {
         case .existing(let id):
+            // A cached model re-hosted by a new view (shell swap) is still live:
+            // keep its transcript, stream and scroll position instead of refetching.
+            if case .loaded = phase, !needsReload { return }
+            needsReload = false
             phase = .loading
             do {
                 async let detailReq = client.conversationDetail(id: id)
@@ -1743,8 +1747,34 @@ final class SessionDetailViewModel {
         stream = nil
     }
 
-    /// Tear down all live work — call from `.onDisappear` / deinit paths.
+    // MARK: - Hosting
+
+    /// Where the transcript was scrolled, kept here so a rebuilt view restores it.
+    let scrollMemory = TranscriptScrollMemory()
+
+    /// Views currently showing this model. A cached model can be re-hosted: an
+    /// iPhone Duo fold/unfold drops one shell's view and builds the other's, in
+    /// either order, so teardown waits until no host is left after a grace period.
+    private var hostCount = 0
+    /// Set by `teardown()`: the stream is gone, so the next `load()` refetches.
+    private var needsReload = false
+
+    func hostAppeared() {
+        hostCount += 1
+    }
+
+    func hostDisappeared() {
+        hostCount = max(0, hostCount - 1)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, self.hostCount == 0 else { return }
+            self.teardown()
+        }
+    }
+
+    /// Tear down all live work — once no view hosts the model (see `hostDisappeared`).
     func teardown() {
+        needsReload = true
         sendTask?.cancel()
         sendTask = nil
         consumerTask?.cancel()

@@ -41,6 +41,16 @@ struct SessionDetailView: View {
         _model = State(initialValue: SessionDetailViewModel(client: client, newSession: request))
     }
 
+    /// Host an existing (cached) model, so the screen survives its view being
+    /// rebuilt — e.g. an iPhone Duo fold/unfold swapping the app shell.
+    init(server: ServerProfile, client: CodegClient, model: SessionDetailViewModel,
+         onOpenSession: ((NewSessionRequest) -> Void)? = nil) {
+        self.server = server
+        self.client = client
+        self.onOpenSession = onOpenSession
+        _model = State(initialValue: model)
+    }
+
     /// Localized nav title: a real session title renders verbatim (user data,
     /// never localized); the unnamed / new-task / loading fallbacks localize.
     private var navTitle: Text {
@@ -129,8 +139,9 @@ struct SessionDetailView: View {
                 SessionDetailsSheet(summary: summary, stats: model.sessionStats, folder: model.folder)
             }
         }
+        .onAppear { model.hostAppeared() }
         .task { await model.load() }
-        .onDisappear { model.teardown() }
+        .onDisappear { model.hostDisappeared() }
         // Haptics — the app's marquee "felt" moments, all keyed off existing
         // @Observable state. Vocabulary: success = a reply completed, error = it
         // failed, warning = the agent needs you (a permission / question card
@@ -166,7 +177,11 @@ struct SessionDetailView: View {
                     Task { await model.load() }
                 }
             case .loaded:
+                // A readable measure on wide screens (an unfolded iPhone Duo or
+                // iPad showing the detail alone); the background still fills.
                 loadedBody
+                    .frame(maxWidth: 760)
+                    .frame(maxWidth: .infinity)
             }
         }
         .transition(.opacity)
@@ -183,6 +198,7 @@ struct SessionDetailView: View {
             turnsVersion: model.turnsVersion,
             scrollTick: model.scrollTick,
             stickTick: model.stickTick,
+            scrollMemory: model.scrollMemory,
             onPinnedChange: { model.setPinnedToBottom($0) }
         ) {
             // No top banner on an existing session — its identity + stats now
