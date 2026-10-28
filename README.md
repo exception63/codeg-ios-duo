@@ -1,5 +1,14 @@
 # Codeg for iOS
 
+> **This is a fork, not the official app.** The `iphone-duo` branch adapts
+> [xintaofei/codeg-ios](https://github.com/xintaofei/codeg-ios) to the iPhone Duo's
+> two screens: one navigation state across the fold, so a session, its scroll
+> position and its terminal survive folding and unfolding. It builds as
+> **Codeg Duo** (`com.exception63.codeg.duo`, `codegduo://`) so it installs
+> alongside the official App Store app. See
+> [docs/iphone-duo-plan.zh-CN.md](docs/iphone-duo-plan.zh-CN.md) (Chinese) for the
+> findings, the plan and what is still open. Apache-2.0, like upstream.
+
 A native, universal (iPhone + iPad) SwiftUI client for the [codeg](https://github.com/xintaofei/codeg)
 multi-agent coding server. Manage your codeg servers, browse their sessions, read
 the full transcript, and reply to the agent with the response streaming back in
