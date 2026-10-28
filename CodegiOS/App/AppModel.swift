@@ -115,7 +115,7 @@ final class AppModel {
     /// tab with a fresh, predictable stack (so Back always returns to that
     /// tab's root, not to wherever the user happened to be).
     func handle(url: URL) {
-        guard url.scheme?.lowercased() == "codeg" else { return }
+        guard Route.isAppURL(url) else { return }
         if url.host?.lowercased() == "tab",
            url.pathComponents.count > 1,
            let tab = AppTab(rawValue: url.pathComponents[1].lowercased()) {

@@ -1,0 +1,6 @@
+// App identity for the iPhone Duo build (branch `iphone-duo`). Distinct from the
+// official `app.codeg.ios` so both apps can be installed side by side. Upstream
+// values for reference: app.codeg.ios / Codeg / codeg.
+CODEG_BUNDLE_ID = com.exception63.codeg.duo
+CODEG_DISPLAY_NAME = Codeg Duo
+CODEG_URL_SCHEME = codegduo

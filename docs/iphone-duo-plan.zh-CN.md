@@ -137,7 +137,7 @@
 | Team | 空（`Signing.local.xcconfig` 自填） | `C5BH6BHB9Q` | 写在 `Config/Signing.local.xcconfig`（已在 .gitignore 里） |
 | 版本号 | 1.0.1 (2) | `MARKETING_VERSION` 不变，`CURRENT_PROJECT_VERSION` 用 `2.1`、`2.2`… | 不占官方的编号，方便看出基于哪个上游版本 |
 
-- **怎么改，又不和上游起冲突**：`project.yml` 里把 `PRODUCT_BUNDLE_IDENTIFIER: app.codeg.ios` 改成 `$(CODEG_BUNDLE_ID)`。`Config/Signing.xcconfig` 加一行默认值 `CODEG_BUNDLE_ID = app.codeg.ios`，自己的值写在 `Signing.local.xcconfig` 里。显示名、URL scheme 用同样的办法（`CODEG_DISPLAY_NAME`、`CODEG_URL_SCHEME`）。这样分支上 `project.yml` 只多几个变量，上游更新时冲突很少。
+- **实际做法（已落地）**：`project.yml` 里的 Bundle ID、显示名、URL scheme 改成变量 `$(CODEG_BUNDLE_ID)`、`$(CODEG_DISPLAY_NAME)`、`$(CODEG_URL_SCHEME)`。Duo 版的值写在随分支提交的 `Config/Identity.xcconfig` 里，由 `Config/Signing.xcconfig` include 进来。这样换一台 Mac 构建，身份也不会变；上游更新时，`project.yml` 只有这几行可能冲突。Team 仍写在本地的 `Signing.local.xcconfig` 里（已被 git 忽略），和上游的约定一致。深链方面，`Route.urlSchemes` 同时认 `codeg` 和 `codegduo`。
 - **真机**：主人的 iPhone Duo（`00008160-000E49093E800036`）已经登记在团队 C5BH6BHB9Q 里。在 Studio 上用 `-allowProvisioningUpdates` 签名，然后按 `iphone-duo-adapt` skill 里「装到真机」那一节，经 MacBook 用 `devicectl` 安装。新 Bundle ID 第一次签名时，Xcode 会自动建 App ID 和描述文件。
 - **许可证**：保留 `LICENSE`、`NOTICE`，在 `NOTICE` 或 README 里加一句「本版本由 exception63 修改，增加了 iPhone Duo 适配」。改过的文件里不能删原作者的版权声明。只要不上架 App Store，就不涉及审核或商标问题。如果以后要公开发布，再单独评估。
 

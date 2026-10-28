@@ -1,6 +1,9 @@
 // Shared signing defaults. Keep personal team identifiers out of source control.
 CODEG_DEVELOPMENT_TEAM =
 
+// Bundle ID, display name and URL scheme (see Identity.xcconfig).
+#include "Identity.xcconfig"
+
 // Optional developer-local override (ignored by Git).
 #include? "Signing.local.xcconfig"
 
