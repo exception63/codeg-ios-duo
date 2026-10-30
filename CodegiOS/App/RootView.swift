@@ -6,11 +6,15 @@ import SwiftUI
 ///   tab, not a detached search pill). Running tasks surface as a badge on the
 ///   Activity tab. The current server is switched from the Chats title menu;
 ///   opening a session pushes the detail (hiding the tab bar).
-/// - **Regular** (iPad, an unfolded iPhone Duo): a three-column
-///   `NavigationSplitView` whose sidebar is the source list (Chats / Folders /
-///   Activity / Search), with the same server title menu and a gear that
-///   presents Settings as a sheet. The content column lists the selected tab;
-///   the detail column shows that tab's route stack.
+/// - **Regular** (iPad, an unfolded iPhone Duo): a `NavigationSplitView` whose
+///   detail column shows the selected tab's route stack. Below 1000pt (an
+///   unfolded iPhone Duo, iPad portrait) it has two columns: the selected tab's
+///   list, with the compact shell's tabs as a bar along its bottom, and the
+///   detail — one collapsible column, so hiding it gives the detail the whole
+///   screen. From 1000pt (iPad landscape) it has three: a source list sidebar
+///   (Chats / Folders / Activity / Search, with the server title menu and a
+///   Settings gear), the selected tab's list, and the detail. Settings is a
+///   sheet on both.
 ///
 /// Both shells read one navigation state (`AppModel.selectedTab` + `paths`), so
 /// switching between them — folding or unfolding an iPhone Duo — keeps the
@@ -22,6 +26,12 @@ struct RootView: View {
     @State private var appearance = AppearanceStore()
     @State private var language = LanguageStore()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var splitLayout: SplitLayout = .twoColumn
+    /// An iPhone Duo hinge half open (false where the device has none).
+    @State private var hingeHalfOpen = false
+    /// The user's last choice in the two-column landscape layout: list hidden,
+    /// detail full width. Kept across fold/unfold and launches.
+    @AppStorage("codeg.listColumnCollapsed") private var listCollapsed = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
 
@@ -256,9 +266,97 @@ struct RootView: View {
         }
     }
 
-    // MARK: - Regular width: three-column split
+    // MARK: - Regular width: split view
+
+    /// Regular-width column layouts, picked by the shell's width.
+    private enum SplitLayout: Equatable {
+        /// ≥ 1000pt (iPad landscape): sidebar · list · detail.
+        case threeColumn
+        /// 800–1000pt (an unfolded iPhone Duo in landscape, ~880pt; iPad
+        /// portrait): list and detail side by side.
+        case twoColumn
+        /// < 800pt (the Duo's portrait, 669pt): the detail, with the list
+        /// called up over it.
+        case twoColumnNarrow
+    }
 
     private var splitShell: some View {
+        ZStack {
+            if splitLayout == .threeColumn {
+                threeColumnSplit
+            } else {
+                twoColumnSplit
+            }
+        }
+        .onGeometryChange(for: SplitLayout.self) { geo in
+            geo.size.width >= 1000 ? .threeColumn : geo.size.width >= 800 ? .twoColumn : .twoColumnNarrow
+        } action: { layout in
+            splitLayout = layout
+            applyColumnVisibility()
+        }
+        .background(HingeObserver(halfOpen: $hingeHalfOpen))
+        .onChange(of: hingeHalfOpen) { applyColumnVisibility() }
+        // A newly opened session / folder: collapse the list again if that is
+        // the layout's resting state (always in portrait, by choice in landscape).
+        .onChange(of: model.paths) { applyColumnVisibility() }
+        // The user's own toggle in landscape (button or edge swipe) is the one
+        // to restore later. Programmatic changes land here too, but only ever
+        // write back the same choice.
+        .onChange(of: columnVisibility) { _, visibility in
+            guard splitLayout == .twoColumn, !hingeHalfOpen, hasDetail else { return }
+            listCollapsed = visibility == .detailOnly
+        }
+        .sheet(isPresented: $model.settingsSheetPresented) {
+            SettingsSheet(
+                store: model.serverStore,
+                selectedServerID: $model.selectedServerID,
+                path: $model.settingsPath
+            )
+        }
+    }
+
+    /// Whether the selected tab has a session / folder open in the detail.
+    private var hasDetail: Bool {
+        !model.paths[model.selectedTab, default: []].isEmpty
+    }
+
+    /// Columns for the current layout. Runs when the layout, the hinge or the
+    /// open route changes — never in response to the user's own toggle, which
+    /// stays put until one of those changes.
+    private func applyColumnVisibility() {
+        columnVisibility = switch splitLayout {
+        case .threeColumn: .all
+        // With nothing open the list stays, or the screen would be blank. A
+        // half-open hinge splits the screen down the middle: keep the list on
+        // the left half (the system lines the column edge up with the crease).
+        case .twoColumn: hasDetail && listCollapsed && !hingeHalfOpen ? .detailOnly : .all
+        case .twoColumnNarrow: hasDetail ? .detailOnly : .all
+        }
+    }
+
+    /// Below 1000pt: the selected tab's list, the tab bar under it, and the
+    /// detail. The only column that collapses is the list.
+    private var twoColumnSplit: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            NavigationStack(path: $model.contentPath) {
+                listRoot
+                    .navigationDestination(for: Route.self) { route in
+                        routeDestination(route)
+                    }
+            }
+            .safeAreaBar(edge: .bottom) {
+                ListColumnTabBar(model: model)
+            }
+            // Max past half the Duo's landscape width (~475pt): half-folded, the
+            // system widens the list to line its edge up with the crease.
+            .navigationSplitViewColumnWidth(min: 320, ideal: 380, max: 520)
+        } detail: {
+            detailColumn
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    private var threeColumnSplit: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SplitSidebar(model: model)
         } content: {
@@ -273,26 +371,15 @@ struct RootView: View {
             detailColumn
         }
         .navigationSplitViewStyle(.balanced)
-        // Columns by available width, re-applied only when the bucket flips (so a
-        // manual toggle sticks): all three when they fit; list + detail on an
-        // unfolded iPhone Duo in landscape (~880pt — `.all` would float the
-        // sidebar over the list); detail alone in its portrait (669pt), unless
-        // there is nothing to show yet.
-        .onGeometryChange(for: Int.self) { geo in
-            geo.size.width >= 1000 ? 2 : geo.size.width >= 800 ? 1 : 0
-        } action: { bucket in
-            columnVisibility = switch bucket {
-            case 2: .all
-            case 1: .doubleColumn
-            default: model.paths[model.selectedTab, default: []].isEmpty ? .doubleColumn : .detailOnly
-            }
-        }
-        .sheet(isPresented: $model.settingsSheetPresented) {
-            SettingsSheet(
-                store: model.serverStore,
-                selectedServerID: $model.selectedServerID,
-                path: $model.settingsPath
-            )
+    }
+
+    /// The two-column list: Chats as on compact (the server switcher is its
+    /// title, with no sidebar to hold it); the other tabs as in three columns.
+    @ViewBuilder
+    private var listRoot: some View {
+        switch model.selectedTab {
+        case .chats, .settings: chatsRoot
+        case .projects, .activity, .search: contentRoot
         }
     }
 
@@ -489,6 +576,89 @@ private struct SplitSidebar: View {
             }
         }
     }
+}
+
+// MARK: - Two-column tab bar
+
+/// The compact tab bar's five tabs as a glass capsule along the bottom of the
+/// two-column list, so folding / unfolding an iPhone Duo keeps the same tabs
+/// under the same list. Drawn by hand: a real `TabView` there is moved by the
+/// system into the Duo's side status strip, away from the list. Settings opens
+/// its sheet.
+private struct ListColumnTabBar: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 0) {
+            item(.chats, "Chats", "message")
+            item(.projects, "Folders", "folder")
+            item(.activity, "Activity", "waveform", badge: model.activity.running.count)
+            item(.search, "Search", "magnifyingglass")
+            item(.settings, "Settings", "gearshape")
+        }
+        .padding(4)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .padding(.horizontal, Theme.Layout.screenHMargin)
+        .padding(.bottom, 8)
+    }
+
+    private func item(_ tab: AppTab, _ title: LocalizedStringKey, _ systemImage: String, badge: Int = 0) -> some View {
+        let selected = model.selectedTab == tab
+        return Button {
+            model.select(tab: tab)
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(height: 24)
+                    .overlay(alignment: .topTrailing) {
+                        if badge > 0 {
+                            Text("\(badge)")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5)
+                                .frame(minWidth: 16, minHeight: 16)
+                                .background(Theme.danger, in: Capsule())
+                                .offset(x: 10, y: -4)
+                        }
+                    }
+                Text(title)
+                    .font(.caption2.weight(.medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(selected ? Theme.accent : .secondary)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(badge > 0 ? Text("\(badge)") : Text(""))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// Reports whether an iPhone Duo's hinge is half open, via `UIHingeInteraction`
+/// (iOS 27.1+). Stays false on devices without a hinge and on older systems.
+private struct HingeObserver: UIViewRepresentable {
+    @Binding var halfOpen: Bool
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        if #available(iOS 27.1, *) {
+            let binding = $halfOpen
+            view.addInteraction(UIHingeInteraction { _, update in
+                let isHalfOpen = update.hinge?.status == .partiallyOpen
+                // The first update can arrive mid-layout; set state afterwards.
+                Task { @MainActor in
+                    if binding.wrappedValue != isHalfOpen { binding.wrappedValue = isHalfOpen }
+                }
+            })
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
 }
 
 // MARK: - Sheets

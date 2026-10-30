@@ -180,7 +180,7 @@ final class AppModel {
         paths[owner] = [route]
     }
 
-    private func select(tab: AppTab) {
+    func select(tab: AppTab) {
         if !isCompact, tab == .settings {
             // Open Settings at its root (not whatever leaf a prior deep link left).
             settingsPath = []
