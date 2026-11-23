@@ -89,9 +89,15 @@ struct ExpertIdBody: Encodable, Sendable {
     let expertId: String
 }
 
-struct ExpertAgentBody: Encodable, Sendable {
+/// One enable / disable of an expert on an agent, for `experts_apply_links`.
+struct ExpertLinkOp: Encodable, Sendable {
     let expertId: String
     let agentType: AgentType
+    let enable: Bool
+}
+
+struct ExpertApplyLinksBody: Encodable, Sendable {
+    let ops: [ExpertLinkOp]
 }
 
 // MARK: - MCP

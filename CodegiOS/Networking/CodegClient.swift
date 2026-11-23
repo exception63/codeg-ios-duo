@@ -404,9 +404,14 @@ struct CodegClient: Sendable {
         try await postJSON("quick_messages_list", EmptyBody())
     }
 
-    /// Experts/skills linked to an agent, for the "+" menu's Expert Skills list.
+    /// Experts/skills linked to an agent, for the "+" menu's Expert Skills list:
+    /// the catalog narrowed to what the link matrix shows on for this agent.
+    /// (codeg has no per-agent list; `experts_list_for_agent` is gone.)
     func experts(agentType: AgentType) async throws -> [ExpertListItem] {
-        try await postJSON("experts_list_for_agent", AgentTypeBody(agentType: agentType))
+        async let catalog = builtInExperts()
+        async let statuses = expertInstallStatuses()
+        let linked = Set(try await statuses.filter { $0.agentType == agentType && $0.state.isLinked }.map(\.expertId))
+        return try await catalog.filter { linked.contains($0.id) }
     }
 
     /// The global built-in expert catalog (`experts_list`). Agent-linked experts

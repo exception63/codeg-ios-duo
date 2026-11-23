@@ -33,3 +33,14 @@ struct ExpertInstallStatus: Decodable, Hashable, Sendable {
     let expectedTargetPath: String
     let copyMode: Bool
 }
+
+/// One op's outcome from `experts_apply_links` (Rust `LinkOpResult`). A failed op
+/// doesn't stop the rest of the batch; `status` is present on a successful enable.
+struct ExpertLinkOpResult: Decodable, Sendable {
+    let expertId: String
+    let agentType: AgentType
+    let ok: Bool
+    let status: ExpertInstallStatus?
+    let error: String?
+    let code: String?
+}

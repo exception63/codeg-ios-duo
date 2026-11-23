@@ -74,18 +74,46 @@ extension CodegClient {
 
     // MARK: - Experts (built-in expert skills)
     // (`builtInExperts()` for `experts_list` lives in CodegClient.swift.)
+    //
+    // codeg 0.46 removed the per-expert routes (`experts_get_install_status`,
+    // `experts_link_to_agent`, `experts_unlink_from_agent`). The whole-matrix read
+    // and the batch write below replace them, and servers have had both since
+    // well before 0.41.
+
+    /// Every expert's link state on every agent.
+    func expertInstallStatuses() async throws -> [ExpertInstallStatus] {
+        try await postJSON("experts_list_all_install_statuses", EmptyBody())
+    }
 
     func expertInstallStatus(expertId: String) async throws -> [ExpertInstallStatus] {
-        try await postJSON("experts_get_install_status", ExpertIdBody(expertId: expertId))
+        try await expertInstallStatuses().filter { $0.expertId == expertId }
     }
 
     @discardableResult
     func expertLink(expertId: String, agentType: AgentType) async throws -> ExpertInstallStatus {
-        try await postJSON("experts_link_to_agent", ExpertAgentBody(expertId: expertId, agentType: agentType))
+        let result = try await applyExpertLink(expertId: expertId, agentType: agentType, enable: true)
+        guard let status = result.status else {
+            throw APIError.decoding("experts_apply_links returned no status for an enable")
+        }
+        return status
     }
 
     func expertUnlink(expertId: String, agentType: AgentType) async throws {
-        _ = try await send("experts_unlink_from_agent", body: ExpertAgentBody(expertId: expertId, agentType: agentType))
+        _ = try await applyExpertLink(expertId: expertId, agentType: agentType, enable: false)
+    }
+
+    /// One op through `experts_apply_links`. A failed op comes back as data in a
+    /// successful response, not as an HTTP error, so it is raised here.
+    private func applyExpertLink(expertId: String, agentType: AgentType, enable: Bool) async throws -> ExpertLinkOpResult {
+        let op = ExpertLinkOp(expertId: expertId, agentType: agentType, enable: enable)
+        let results: [ExpertLinkOpResult] = try await postJSON("experts_apply_links", ExpertApplyLinksBody(ops: [op]))
+        guard let result = results.first else {
+            throw APIError.decoding("experts_apply_links returned no result")
+        }
+        guard result.ok else {
+            throw APIError.server(status: 200, code: result.code, message: result.error ?? "The expert couldn't be changed.")
+        }
+        return result
     }
 
     func expertContent(expertId: String) async throws -> String {
