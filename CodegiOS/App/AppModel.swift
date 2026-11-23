@@ -76,6 +76,12 @@ final class AppModel {
     var serversSheetPresented = false
     var settingsSheetPresented = false
 
+    /// Counts the links that took the app somewhere (`handle(url:)`). A list
+    /// presented over a tab's stack — a group's fullscreen list, which keeps a
+    /// stack of its own — closes on each, so the place the link went is what
+    /// shows rather than landing on the stack hidden under it.
+    private(set) var linkArrivals = 0
+
     init(serverStore: ServerStore? = nil) {
         let store = serverStore ?? ServerStore()
         self.serverStore = store
@@ -155,6 +161,7 @@ final class AppModel {
         if url.host?.lowercased() == "tab",
            url.pathComponents.count > 1,
            let tab = AppTab(rawValue: url.pathComponents[1].lowercased()) {
+            linkArrivals += 1
             select(tab: tab)
             return
         }
@@ -166,6 +173,7 @@ final class AppModel {
         if url.host?.lowercased() == "settings",
            url.pathComponents.count > 1,
            let leaf = SettingsLeaf(slug: url.pathComponents[1]) {
+            linkArrivals += 1
             settingsPath = [leaf]
             if isCompact {
                 selectedTab = .settings
@@ -175,6 +183,7 @@ final class AppModel {
             return
         }
         guard let route = Route.from(url: url) else { return }
+        linkArrivals += 1
         let owner: AppTab = if case .project = route { .projects } else { .chats }
         selectedTab = owner
         paths[owner] = [route]
@@ -255,6 +264,10 @@ final class AppModel {
         sessionModels = [:]
         folderStates = [:]
         activity.reset()
+        // Custom-agent identity is endpoint-local: an agent registered on one
+        // server doesn't exist on another, and showing the old server's name
+        // under a new server's rows would be worse than the slug fallback.
+        CustomAgentRegistry.shared.reset()
     }
 
     /// …and when the selected server is edited in place (same UUID, new
